@@ -24,12 +24,12 @@ use Tyhp\Exceptions\TimeoutException;
  *
  * The default TReturn must be `mixed` so PHP users that do not specify generics
  * will get it is `Promise<mixed>`
+ * @template TReturn
  */
 #[\Tyhp\GenericRuntime(erased: false, factory: "new_Tyhp_Promise__tyhpGeneric", layouts: [1], compiler: "805.1.0.0")]
 final class Promise
 {
     use \Tyhp\Concerns\HasGenerics;
-    use \Tyhp\Concerns\UsesPropertyAccessors;
 
     /**
      * Maps Fibers to their owning Promise. WeakMap prevents memory leaks.
@@ -38,6 +38,12 @@ final class Promise
     private static ?\WeakMap $fiberToPromise = null;
     private static ?\ReflectionClass $__reflectedClass__tyhpGeneric = null;
     private \Tyhp\PromiseState $state = PromiseState::Pending;
+    private mixed $value = null {
+        set(mixed $value) {
+            $this->__tyhpGeneric->checkProperty('value', $value);
+            $this->value = $value;
+        }
+    }
     private ?\Throwable $error = null;
     private ?\Fiber $fiber = null;
     private array $onSettled = [];
@@ -50,9 +56,6 @@ final class Promise
         $this->tyhpBootTraits();
         if ($this->__tyhpGeneric->needsInit()) {
             self::__initGenerics__tyhpGeneric(null);
-        }
-        if ($this->__tyhpPropertyHook->needsInit()) {
-            self::__initPropertyHooks__tyhpPropertyHook();
         }
         if ($immediateResolve) {
             $this->doResolve($executor());
@@ -905,29 +908,6 @@ final class Promise
         $this->__tyhpGeneric->setPropertyType('fiber', \Tyhp\Type::nullable(\Tyhp\Type::generic(\Fiber::class, new \Tyhp\NamedType('TValue', \Tyhp\Type::mixed()), new \Tyhp\NamedType('T1', \Tyhp\Type::callableShape('callable')))));
         $this->__tyhpGeneric->setPropertyType('onSettled', \Tyhp\Type::generic('array', new \Tyhp\NamedType('TValue', \Tyhp\Type::callableShape('callable'))));
         $this->__tyhpGeneric->markBound();
-    }
-    protected function __initPropertyHooks__tyhpPropertyHook(): void
-    {
-        $this->tyhpBootTraits();
-        if ($this->__tyhpPropertyHook->isInitialized(self::class)) {
-            return;
-        }
-        $this->__tyhpPropertyHook->register__tyhpGeneric(\Tyhp\Type::mixed())(
-            'value',
-            $this,
-            set: $this->__set_value__tyhpPropertyHook(...),
-            backed: true,
-            declaringClass: self::class,
-            defaultValueIsNull: true,
-            visibility: 'private',
-            setVisibility: 'private',
-        );
-        $this->__tyhpPropertyHook->markBound();
-    }
-    private function __set_value__tyhpPropertyHook(mixed $value): void
-    {
-        $this->__tyhpGeneric->checkProperty('value', $value);
-        $this->__tyhpPropertyHook->setBacking('value', $value, self::class);
     }
 }
 //# sourceMappingURL=Promise.php.map
