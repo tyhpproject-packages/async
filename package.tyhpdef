@@ -2,7 +2,7 @@
 /**
  * AUTO-GENERATED, DO NOT EDIT
  * Compiler: 805.1.0.0
- * Generated: 2026-10-05T14:06:42.2059950Z
+ * Generated: 2026-10-05T14:06:50.1709750Z
  */
 namespace Tyhp {
     enum PromiseState: string {
