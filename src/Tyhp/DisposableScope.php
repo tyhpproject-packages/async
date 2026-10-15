@@ -63,7 +63,7 @@ final class DisposableScope implements \Tyhp\Contracts\IsDisposable
      */
     public function release(\Tyhp\Contracts\IsDisposable|\Tyhp\Contracts\AsyncIsDisposable $resource): void
     {
-        $this->released->attach($resource);
+        $this->released->offsetSet($resource, null);
     }
     /**
      * Disposes all registered resources in reverse order, skipping any
@@ -73,7 +73,7 @@ final class DisposableScope implements \Tyhp\Contracts\IsDisposable
     {
         $errors = [];
         foreach (\array_reverse($this->disposables) as $disposable) {
-            if ($this->released->contains($disposable)) {
+            if ($this->released->offsetExists($disposable)) {
                 continue;
             }
             try {

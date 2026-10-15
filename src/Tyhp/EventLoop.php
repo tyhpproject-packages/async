@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 namespace Tyhp;
 
+use Tyhp\Exceptions\OperationCancelledException;
 use Tyhp\Exceptions\TimeoutException;
 
 /**
@@ -40,18 +41,27 @@ final class EventLoop
     private bool $streamsDirty = true;
     private array $cachedReadStreams = [];
     private array $cachedWriteStreams = [];
+    /** Fibers this loop has started (weakly held). A cancelled run unwinds the suspended ones. */
+    private \WeakMap $startedFibers;
+    /** Fibers a cancelled run gave up on. The loop never starts or resumes them again. */
+    private \WeakMap $abandonedFibers;
     private function __construct()
     {
         $this->microtaskQueue = new \SplQueue();
         $this->fiberResumeQueue = new \SplQueue();
         $this->timerQueue = new \SplPriorityQueue();
         $this->timerQueue->setExtractFlags(\SplPriorityQueue::EXTR_DATA);
+        $this->startedFibers = new \WeakMap();
+        $this->abandonedFibers = new \WeakMap();
     }
     public static function getInstance(): \Tyhp\EventLoop
     {
         return self::$instance ??= new EventLoop();
     }
-    /** @internal For testing only. */
+    /**
+     * Discards the shared loop so the next {@see getInstance()} starts a fresh one. Call it in a
+     * forked child that must not inherit the parent's timers, fibers, or streams, and between tests.
+     */
     public static function resetInstance(): void
     {
         self::$instance = null;
@@ -141,7 +151,7 @@ final class EventLoop
         $this->streamsDirty = true;
     }
     /**
-     * Defers a callback to run at the start of the next microtask drain.
+     * Alias of `queueMicrotask()`: queues the callback on the microtask queue.
      */
     public function defer(callable $callback): void
     {
@@ -156,11 +166,35 @@ final class EventLoop
         $this->microtaskQueue->enqueue($callback);
     }
     /**
-     * Runs the event loop until the root Promise settles and all work is done.
+     * Runs the event loop until the root Promise has settled and no work is immediately runnable.
+     * Timers that are not yet due and stream watchers do not keep it running.
      * Blocks until the Promise resolves (returning the value) or rejects (throwing).
+     *
+     * When `$token` is given, cancellation is checked once per loop iteration, after the
+     * microtask, timer, and I/O phases. If it has been requested while the root Promise is still
+     * pending, the loop is shut down without waiting for I/O again and `run` throws
+     * `OperationCancelledException`. If the root Promise settled in the same iteration, its own
+     * result or error is returned or thrown instead and nothing is torn down.
+     *
+     * Shutting down stops all of the loop's work, not only the root's:
+     *  - queued microtasks and queued fiber starts are dropped; the Promise of a fiber that never
+     *    started is rejected with `OperationCancelledException`;
+     *  - every timer and interval is cancelled and every stream watcher is removed (the streams
+     *    themselves are not closed);
+     *  - every fiber suspended on a pending Promise is unwound by throwing
+     *    `OperationCancelledException` into it, so its `finally` blocks run (and unregister their
+     *    cancellation callbacks), and its own Promise is rejected with that exception. A fiber that
+     *    catches the exception and suspends again is rejected and abandoned instead. No fiber the loop
+     *    gave up on is ever started or resumed again, even if the Promise it awaited settles later;
+     *  - an error thrown by that cleanup code is attached as the `previous` exception of the one
+     *    thrown from `run`.
+     *
+     * The loop is reusable afterwards. Cancellation is noticed at the next iteration, so a single
+     * callback that never returns control to the loop is not interrupted. An already-cancelled
+     * token is rejected by `Promise::run()` before the loop starts.
      */
     #[\Tyhp\GenericRuntime(erased: true, layouts: [1], compiler: "805.1.0.0")]
-    public function run(\Tyhp\Promise $rootPromise): mixed
+    public function run(\Tyhp\Promise $rootPromise, ?\Tyhp\CancellationToken $token = null): mixed
     {
         if ($this->running) {
             throw new \LogicException('EventLoop::run() called re-entrantly — use await instead of run() inside an async context');
@@ -171,6 +205,9 @@ final class EventLoop
                 $this->processMicrotasks();
                 $this->processTimers();
                 $this->pollIO();
+                if ((($token !== null) && !$rootPromise->isCompleted()) && $token->isCancellationRequested()) {
+                    throw $this->shutDown($token);
+                }
                 if ($rootPromise->isCompleted() && $this->isEmpty()) {
                     break;
                 }
@@ -268,8 +305,12 @@ final class EventLoop
                 continue;
             }
             $item = $raw;
+            if (isset($this->abandonedFibers[$item->fiber])) {
+                continue;
+            }
             try {
                 if ($item->action === 'start') {
+                    $this->startedFibers[$item->fiber] = true;
                     $item->fiber->start();
                 } elseif ($item->action === 'resume') {
                     $item->fiber->resume($item->value);
@@ -449,6 +490,99 @@ final class EventLoop
                 }
             }
         }
+    }
+    /**
+     * Stops all of the loop's work after the token of a run was cancelled and returns the exception
+     * for `run()` to throw. See {@see run()} for the guarantees.
+     */
+    private function shutDown(\Tyhp\CancellationToken $token): \Tyhp\Exceptions\OperationCancelledException
+    {
+        $reason = new \Tyhp\Exceptions\OperationCancelledException($token);
+        $cleanupError = null;
+        $fiberMap = \Tyhp\Promise::getFiberMap();
+        $suspended = [];
+        $neverStarted = [];
+        foreach ($this->startedFibers as $fiber => $_) {
+            if (($fiber instanceof \Fiber) && !isset($this->abandonedFibers[$fiber])) {
+                $this->abandonedFibers[$fiber] = true;
+                if ($fiber->isSuspended()) {
+                    $suspended[] = $fiber;
+                }
+            }
+        }
+        foreach ($this->fiberResumeQueue as $queued) {
+            if (!($queued instanceof EventLoopFiberItem)) {
+                continue;
+            }
+            $queuedFiber = $queued->fiber;
+            if (!($queuedFiber instanceof \Fiber) || isset($this->abandonedFibers[$queuedFiber])) {
+                continue;
+            }
+            $this->abandonedFibers[$queuedFiber] = true;
+            if ($queued->action === 'start') {
+                $neverStarted[] = $queuedFiber;
+            } elseif ($queuedFiber->isSuspended()) {
+                $suspended[] = $queuedFiber;
+            }
+        }
+        $this->clearScheduledWork();
+        try {
+            foreach ($neverStarted as $fiber) {
+                try {
+                    $this->rejectOwner($fiberMap, $fiber, $reason);
+                } catch (\Throwable $e) {
+                    $cleanupError ??= $e;
+                }
+            }
+            foreach ($suspended as $fiber) {
+                if (!$fiber->isSuspended()) {
+                    continue;
+                }
+                try {
+                    $fiber->throw($reason);
+                } catch (\Throwable $e) {
+                    $cleanupError ??= $e;
+                }
+                if (!$fiber->isTerminated()) {
+                    try {
+                        $this->rejectOwner($fiberMap, $fiber, $reason);
+                    } catch (\Throwable $e) {
+                        $cleanupError ??= $e;
+                    }
+                }
+            }
+        } finally {
+            $this->clearScheduledWork();
+        }
+        return ($cleanupError === null) ? $reason : new \Tyhp\Exceptions\OperationCancelledException($token, 'The operation was cancelled', $cleanupError);
+    }
+    private function rejectOwner(\WeakMap $fiberMap, \Fiber $fiber, \Throwable $reason): void
+    {
+        if (isset($fiberMap[$fiber])) {
+            $owner = $fiberMap[$fiber];
+            if ($owner instanceof \Tyhp\Promise) {
+                $owner->doReject($reason);
+            }
+        }
+    }
+    /**
+     * Drops queued microtasks and fiber starts/resumes, all timers and intervals, and all stream
+     * watchers.
+     */
+    private function clearScheduledWork(): void
+    {
+        $this->fiberResumeQueue = new \SplQueue();
+        $this->microtaskQueue = new \SplQueue();
+        $this->timerQueue = new \SplPriorityQueue();
+        $this->timerQueue->setExtractFlags(\SplPriorityQueue::EXTR_DATA);
+        $this->activeTimers = [];
+        $this->readStreams = [];
+        $this->writeStreams = [];
+        $this->readCallbacks = [];
+        $this->writeCallbacks = [];
+        $this->cachedReadStreams = [];
+        $this->cachedWriteStreams = [];
+        $this->streamsDirty = true;
     }
     private function isEmpty(): bool
     {

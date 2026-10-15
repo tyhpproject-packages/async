@@ -15,28 +15,32 @@ namespace Tyhp;
  * `status` is `'fulfilled'` or `'rejected'`. Fulfilled outcomes set `value`;
  * rejected outcomes set `reason`.
  * @template T
+ * @property ?T $value
  */
 #[\Tyhp\GenericRuntime(erased: false, factory: "new_Tyhp_PromiseSettledResult__tyhpGeneric", layouts: [1], compiler: "805.1.0.0")]
 final class PromiseSettledResult
 {
     use \Tyhp\Concerns\HasGenerics;
+    use \Tyhp\Concerns\UsesPropertyAccessors;
 
     private static ?\ReflectionClass $__reflectedClass__tyhpGeneric = null;
-    public function __construct(
-        public string $status,
-        public mixed $value = null {
-            set(mixed $value) {
-                $this->__tyhpGeneric->checkProperty('value', $value);
-                $this->value = $value;
-            }
-        },
-        public ?\Throwable $reason = null,
-    )
+    public function __construct(public string $status, mixed $value = null, public ?\Throwable $reason = null)
     {
         $this->tyhpBootTraits();
         if ($this->__tyhpGeneric->needsInit()) {
             self::__initGenerics__tyhpGeneric(null);
         }
+        if ($this->__tyhpPropertyHook->needsInit()) {
+            self::__initPropertyHooks__tyhpPropertyHook();
+        }
+        $this->__tyhpPropertyHook->register__tyhpGeneric(\Tyhp\Type::mixed())(
+            'value',
+            $this,
+            set: $this->__set_value__tyhpPropertyHook(...),
+            backed: true,
+            declaringClass: self::class,
+        );
+        $this->__tyhpPropertyHook->set('value', $value);
         $this->__tyhpGeneric->enablePropertyChecks();
     }
     final public static function new_Tyhp_PromiseSettledResult__tyhpGeneric(?\Tyhp\Type $__generic_T, string $status, mixed $value = null, ?\Throwable $reason = null): self
@@ -46,6 +50,11 @@ final class PromiseSettledResult
         $__tyhp_obj->__initGenerics__tyhpGeneric($__generic_T);
         $__tyhp_obj->__construct($status, $value, $reason);
         return $__tyhp_obj;
+    }
+    private function __set_value__tyhpPropertyHook(mixed $value): void
+    {
+        $this->__tyhpGeneric->checkProperty('value', $value);
+        $this->__tyhpPropertyHook->setBacking('value', $value, self::class);
     }
     protected function __initGenerics__tyhpGeneric(?\Tyhp\Type ...$generics): void
     {
@@ -57,6 +66,11 @@ final class PromiseSettledResult
         $this->__tyhpGeneric->init(static::class, \Tyhp\PromiseSettledResult::class, new \Tyhp\NamedType('T', $t));
         $this->__tyhpGeneric->setPropertyType('value', \Tyhp\Type::nullable($t));
         $this->__tyhpGeneric->markBound();
+    }
+    protected function __initPropertyHooks__tyhpPropertyHook(): void
+    {
+        $this->tyhpBootTraits();
+        $this->__tyhpPropertyHook->markBound();
     }
 }
 //# sourceMappingURL=PromiseSettledResult.php.map

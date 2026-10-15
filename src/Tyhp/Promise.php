@@ -24,12 +24,12 @@ use Tyhp\Exceptions\TimeoutException;
  *
  * The default TReturn must be `mixed` so PHP users that do not specify generics
  * will get it is `Promise<mixed>`
- * @template TReturn
  */
 #[\Tyhp\GenericRuntime(erased: false, factory: "new_Tyhp_Promise__tyhpGeneric", layouts: [1], compiler: "805.1.0.0")]
 final class Promise
 {
     use \Tyhp\Concerns\HasGenerics;
+    use \Tyhp\Concerns\UsesPropertyAccessors;
 
     /**
      * Maps Fibers to their owning Promise. WeakMap prevents memory leaks.
@@ -38,12 +38,6 @@ final class Promise
     private static ?\WeakMap $fiberToPromise = null;
     private static ?\ReflectionClass $__reflectedClass__tyhpGeneric = null;
     private \Tyhp\PromiseState $state = PromiseState::Pending;
-    private mixed $value = null {
-        set(mixed $value) {
-            $this->__tyhpGeneric->checkProperty('value', $value);
-            $this->value = $value;
-        }
-    }
     private ?\Throwable $error = null;
     private ?\Fiber $fiber = null;
     private array $onSettled = [];
@@ -56,6 +50,9 @@ final class Promise
         $this->tyhpBootTraits();
         if ($this->__tyhpGeneric->needsInit()) {
             self::__initGenerics__tyhpGeneric(null);
+        }
+        if ($this->__tyhpPropertyHook->needsInit()) {
+            self::__initPropertyHooks__tyhpPropertyHook();
         }
         if ($immediateResolve) {
             $this->doResolve($executor());
@@ -89,7 +86,7 @@ final class Promise
     {
         $__generic_T ??= \Tyhp\Type::mixed();
         return function (callable $fn) use ($__generic_T): self {
-            return \Tyhp\Promise::new_Tyhp_Promise__tyhpGeneric($__generic_T, $fn);
+            return \Tyhp\Promise::new_Tyhp_Promise__tyhpGeneric(\Tyhp\Type::awaited($__generic_T), $fn);
         };
     }
     /**
@@ -211,9 +208,13 @@ final class Promise
         };
     }
     /**
-     * Creates an already-fulfilled Promise with the given value.
-     * Resolves immediately without scheduling a Fiber. When `$value` is omitted or
-     * null, uses `default(T)`. Unlike `resolve()`, does not unwrap an existing Promise.
+     * Creates a new Promise fulfilled with the given value, without scheduling a Fiber.
+     * When `$value` is omitted or null, uses `default(T)`.
+     *
+     * Always returns a new Promise; `resolve()` returns an existing Promise unchanged.
+     * When `$value` is a Promise, the new Promise adopts it and settles when that Promise
+     * settles, whatever `T` is. The result type is `Promise<__Awaited<T>>`, so
+     * `resolved<Promise<int>>($p)` is a `Promise<int>`, never a promise of a promise.
      */
     #[\Tyhp\GenericRuntime(erased: false, binder: "resolved__tyhpGeneric", layouts: [1], compiler: "805.1.0.0")]
     public static function resolved(mixed $value = null): self
@@ -228,13 +229,12 @@ final class Promise
     {
         $__generic_T ??= \Tyhp\Type::void();
         return function (mixed $value = null) use ($__generic_T): self {
-            return \Tyhp\Promise::new_Tyhp_Promise__tyhpGeneric($__generic_T, fn(): mixed => $value ?? $__generic_T->defaultValue(), true);
+            return \Tyhp\Promise::new_Tyhp_Promise__tyhpGeneric(\Tyhp\Type::awaited($__generic_T), fn(): mixed => $value ?? $__generic_T->defaultValue(), true);
         };
     }
     /**
      * Creates an already-rejected Promise with the given error.
-     * Rejects immediately without scheduling a Fiber. Unlike `reject()`, settles via
-     * immediate construction and `doReject()` rather than a throwing executor.
+     * Rejects immediately without scheduling a Fiber. `reject()` is an alias.
      */
     #[\Tyhp\GenericRuntime(erased: false, binder: "rejected__tyhpGeneric", layouts: [1], compiler: "805.1.0.0")]
     public static function rejected(\Throwable $error): self
@@ -249,15 +249,16 @@ final class Promise
     {
         $__generic_T ??= \Tyhp\Type::void();
         return function (\Throwable $error) use ($__generic_T): self {
-            $promise = \Tyhp\Promise::new_Tyhp_Promise__tyhpGeneric($__generic_T, fn(): mixed => $__generic_T->defaultValue(), true);
+            $promise = \Tyhp\Promise::new_Tyhp_Promise__tyhpGeneric(\Tyhp\Type::awaited($__generic_T), fn(): mixed => $__generic_T->defaultValue(), true);
             $promise->state = PromiseState::Pending;
             $promise->doReject($error);
             return $promise;
         };
     }
     /**
-     * Creates a Promise with externally-controlled resolution.
-     * Returns an object with promise, resolve, and reject properties.
+     * Creates a pending Promise that is settled from outside.
+     * Returns a Deferred: call `getPromise()` for the Promise, then `resolve()` or `reject()`
+     * to settle it. A Deferred settles only once; a second call throws.
      */
     #[\Tyhp\GenericRuntime(erased: false, binder: "withResolvers__tyhpGeneric", layouts: [1], compiler: "805.1.0.0")]
     public static function withResolvers(): \Tyhp\Deferred
@@ -272,13 +273,24 @@ final class Promise
     {
         $__generic_T ??= \Tyhp\Type::mixed();
         return function () use ($__generic_T): \Tyhp\Deferred {
-            return \Tyhp\Deferred::new_Tyhp_Deferred__tyhpGeneric($__generic_T);
+            return \Tyhp\Deferred::new_Tyhp_Deferred__tyhpGeneric(\Tyhp\Type::awaited($__generic_T));
         };
     }
     /**
      * Entry point for async code from synchronous PHP.
-     * Creates a Promise from the callable, starts the event loop, and blocks
-     * until the Promise settles.
+     *
+     * Runs `$fn` in a new Fiber, drives the event loop until that work settles, and returns
+     * the value. `$fn` may be a plain callable, an `async` closure or arrow function, or any
+     * callable that returns a Promise; a returned Promise is awaited. If `$fn` throws, or the
+     * Promise it returns rejects, the exception is rethrown here. Throws `\LogicException`
+     * when the loop is already running.
+     *
+     * With a `$token`, an already-cancelled token throws `OperationCancelledException` before
+     * `$fn` is called. Otherwise the event loop checks the token once per iteration, and if it is
+     * cancelled while the work is still pending, the whole loop is shut down and `run` throws
+     * `OperationCancelledException`; work that has settled by then keeps its own result or error.
+     * Shutting down cancels every timer, interval, and stream watcher, drops queued work, and
+     * unwinds every fiber suspended on a pending Promise (see `EventLoop::run()`).
      */
     #[\Tyhp\GenericRuntime(erased: false, binder: "run__tyhpGeneric", layouts: [1], compiler: "805.1.0.0")]
     public static function run(callable $fn, ?\Tyhp\CancellationToken $token = null): mixed
@@ -294,9 +306,7 @@ final class Promise
         $__generic_T ??= \Tyhp\Type::mixed();
         return function (callable $fn, ?\Tyhp\CancellationToken $token = null) use ($__generic_T): mixed {
             $token?->throwIfCancellationRequested();
-            $promise = self::_async__tyhpGeneric($__generic_T)($fn);
-            EventLoop::getInstance()->run($promise);
-            return $promise->getResult();
+            return EventLoop::getInstance()->run(self::_async__tyhpGeneric($__generic_T)($fn), $token);
         };
     }
     /**
@@ -322,6 +332,9 @@ final class Promise
                 $ct = $token;
                 $unregister = $ct->register(
                     function () use ($deferred, $timerId, $ct): void {
+                        if ($deferred->getPromise()->isCompleted()) {
+                            return;
+                        }
                         EventLoop::getInstance()->cancelTimer($timerId);
                         $deferred->reject(new \Tyhp\Exceptions\OperationCancelledException($ct));
                     },
@@ -722,9 +735,6 @@ final class Promise
         self::getFiberMap()[$this->fiber] = $this;
         EventLoop::getInstance()->scheduleFiber($this->fiber);
     }
-    /**
-     * Registers fulfillment and/or rejection handlers, returning a new Promise.
-     */
     #[\Tyhp\GenericRuntime(erased: true, layouts: [1], compiler: "805.1.0.0")]
     public function then(?callable $onFulfilled = null, ?callable $onRejected = null): \Tyhp\Promise
     {
@@ -743,7 +753,6 @@ final class Promise
     /**
      * Registers a rejection handler.
      */
-    #[\Tyhp\GenericRuntime(erased: true, layouts: [1], compiler: "805.1.0.0")]
     public function catch(callable $onRejected): self
     {
         return $this->then(null, $onRejected);
@@ -860,7 +869,7 @@ final class Promise
             $this->processCallbacks();
             return;
         }
-        throw new \InvalidArgumentException("value incompatible with 'TReturn' of Promise");
+        throw new \InvalidArgumentException(("value incompatible with " . ('TReturn') . " of Promise"));
     }
     /**
      * Transitions this Promise to the Rejected state.
@@ -905,9 +914,32 @@ final class Promise
         $tReturn = $generics[0] ?? \Tyhp\Type::mixed();
         $this->__tyhpGeneric->init(static::class, \Tyhp\Promise::class, new \Tyhp\NamedType('TReturn', $tReturn));
         $this->__tyhpGeneric->setPropertyType('value', \Tyhp\Type::nullable($tReturn));
-        $this->__tyhpGeneric->setPropertyType('fiber', \Tyhp\Type::nullable(\Tyhp\Type::generic(\Fiber::class, new \Tyhp\NamedType('TValue', \Tyhp\Type::mixed()), new \Tyhp\NamedType('T1', \Tyhp\Type::callableShape('callable')))));
+        $this->__tyhpGeneric->setPropertyType('fiber', \Tyhp\Type::nullable(\Tyhp\Type::generic(\Fiber::class, new \Tyhp\NamedType('TResume', \Tyhp\Type::mixed()), new \Tyhp\NamedType('TCallableShape', \Tyhp\Type::callableShape('callable')))));
         $this->__tyhpGeneric->setPropertyType('onSettled', \Tyhp\Type::generic('array', new \Tyhp\NamedType('TValue', \Tyhp\Type::callableShape('callable'))));
         $this->__tyhpGeneric->markBound();
+    }
+    protected function __initPropertyHooks__tyhpPropertyHook(): void
+    {
+        $this->tyhpBootTraits();
+        if ($this->__tyhpPropertyHook->isInitialized(self::class)) {
+            return;
+        }
+        $this->__tyhpPropertyHook->register__tyhpGeneric(\Tyhp\Type::mixed())(
+            'value',
+            $this,
+            set: $this->__set_value__tyhpPropertyHook(...),
+            backed: true,
+            declaringClass: self::class,
+            defaultValueIsNull: true,
+            visibility: 'private',
+            setVisibility: 'private',
+        );
+        $this->__tyhpPropertyHook->markBound();
+    }
+    private function __set_value__tyhpPropertyHook(mixed $value): void
+    {
+        $this->__tyhpGeneric->checkProperty('value', $value);
+        $this->__tyhpPropertyHook->setBacking('value', $value, self::class);
     }
 }
 //# sourceMappingURL=Promise.php.map

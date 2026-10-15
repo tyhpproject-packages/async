@@ -75,7 +75,7 @@ final class Deferred
         }
         $t = $generics[0] ?? \Tyhp\Type::void();
         $this->__tyhpGeneric->init(static::class, \Tyhp\Deferred::class, new \Tyhp\NamedType('T', $t));
-        $this->__tyhpGeneric->setPropertyType('promise', \Tyhp\Type::generic(\Tyhp\Promise::class, new \Tyhp\NamedType('TValue', $t)));
+        $this->__tyhpGeneric->setPropertyType('promise', \Tyhp\Type::generic(\Tyhp\Promise::class, new \Tyhp\NamedType('TReturn', $t)));
         $this->__tyhpGeneric->markBound();
     }
 }
