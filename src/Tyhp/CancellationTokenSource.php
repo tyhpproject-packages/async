@@ -72,7 +72,7 @@ final class CancellationTokenSource implements \Tyhp\Contracts\IsDisposable
             try {
                 EventLoop::getInstance()->cancelTimer($timerId);
             } catch (\Throwable $e) {
-                $e;
+                (void) $e;
             }
         }
     }
